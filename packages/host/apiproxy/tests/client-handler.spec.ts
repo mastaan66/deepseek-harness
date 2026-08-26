@@ -27,6 +27,7 @@ function scriptedApi(overrides: {
   goals?: Partial<ApiProxy['goals']>
   settings?: Partial<ApiProxy['settings']>
   credentials?: Partial<ApiProxy['credentials']>
+  authorization?: Partial<ApiProxy['authorization']>
   llm?: Partial<ApiProxy['llm']>
   respond?: ApiProxy['respond']
 } = {}): ApiProxy {
@@ -121,6 +122,14 @@ function scriptedApi(overrides: {
       set: err,
       unset: err,
       ...overrides.credentials,
+    },
+    authorization: {
+      list: r => ok(r, { flows: [] }),
+      begin: err,
+      cancel: r => ok(r, {}),
+      status: r => ok(r, {}),
+      answer: err,
+      ...overrides.authorization,
     },
     llm: {
       providers: r => ok(r, { providers: [] }),
@@ -748,6 +757,13 @@ describe('config unary surface', () => {
         describe: record('credentials.describe', r => ok(r, { credentials: { OPENAI_API_KEY: { configured: true, source: 'file', writable: true } } })),
         set: record('credentials.set', r => ok(r, {})),
         unset: record('credentials.unset', r => ok(r, {})),
+      },
+      authorization: {
+        list: record('authorization.list', r => ok(r, { flows: [] })),
+        begin: record('authorization.begin', r => ok(r, { status: 'cancelled' as const })),
+        cancel: record('authorization.cancel', r => ok(r, {})),
+        status: record('authorization.status', r => ok(r, {})),
+        answer: record('authorization.answer', r => ok(r, {})),
       },
       llm: {
         providers: record('llm.providers', r => ok(r, { providers: [providerRow] })),

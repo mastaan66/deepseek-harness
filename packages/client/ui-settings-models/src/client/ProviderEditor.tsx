@@ -23,7 +23,9 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { CredentialView, IApiClient, SettingsNamespaceView, SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
+import type {
+  AuthorizationFlowView, CredentialView, IApiClient, SettingsNamespaceView, SettingsPathOpView,
+} from '@deepseek-ai/dsh-api-remotes/client'
 import {
   DeepSeekModelsEditor, modelDrafts, validateDeepSeekModels,
 } from './DeepSeekModelsEditor.tsx'
@@ -33,6 +35,7 @@ import { ModelListEditor } from './ModelListEditor.tsx'
 import { deriveKeyRef, messageOf, protocolChoices } from './store.ts'
 import type { SettingsSchemaOperations } from './schema-operations.ts'
 import type { en } from './locales.ts'
+import { SignInControl } from './SignInControl.tsx'
 import styles from './ModelsSection.module.css'
 
 /** Per-adapter-family curated field sets (unknown namespaces get the hint alone). */
@@ -64,7 +67,13 @@ export interface ProviderEditorProps {
   /** Path from the section root to this provider's profile. */
   settingsPath: readonly string[]
   /** Wire faces for writes and for interrogating a provider endpoint. */
-  api: Pick<IApiClient, 'settings' | 'credentials' | 'llm'>
+  api: Pick<IApiClient, 'settings' | 'credentials' | 'llm' | 'authorization'>
+  /**
+   * The authorization flow claiming this provider's credential record, when
+   * one does. Present, it renders the interactive sign-in control beside the
+   * key field; absent, the provider authenticates only by key or environment.
+   */
+  flow?: AuthorizationFlowView
   /** Section copy. */
   t: (key: keyof typeof en) => string
   /** Disable writes (read-only settings provider). */
@@ -492,7 +501,28 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
         )}
       {layout === 'unknown'
         ? <p className={styles['advancedHint']}>{`${t('advancedHint')} (${namespace.ns})`}</p>
-        : curatedFields(layout)}
+        : (
+          <>
+            {props.flow === undefined
+              ? null
+              : (
+                <SignInControl
+                  flow={props.flow}
+                  api={{ authorization: api.authorization }}
+                  t={t}
+                  disabled={disabled}
+                  onSettled={() => {
+                    // A settled attempt changed the stored credential: the
+                    // key-state hint and the page join both refresh from it.
+                    void api.credentials.describe({ refs: [keyRef] }).then((response) => {
+                      if (response.result.ok) setKeyState(response.result.value.credentials[keyRef])
+                    }, () => undefined)
+                  }}
+                />
+              )}
+            {curatedFields(layout)}
+          </>
+        )}
       {failure !== undefined ? <p className={styles['error']}>{failure}</p> : null}
       {props.credentialOnly === true || modelFailure === undefined
         ? null

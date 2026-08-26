@@ -142,6 +142,8 @@ function scriptedFace(overrides: {
   mutate?: ReturnType<typeof vi.fn>
   set?: ReturnType<typeof vi.fn>
   unset?: ReturnType<typeof vi.fn>
+  authorizationFlows?: { key: string; label: string; methods: { id: string; label: string }[]; inFlight: boolean }[]
+  authorizationBegin?: () => Promise<RpcResponse<{ status: 'authorized' | 'cancelled' }>>
 } = {}) {
   const update = overrides.update ?? vi.fn(() => Promise.resolve(ok(wireNamespaces()[2])))
   const replace = overrides.replace ?? vi.fn(() => Promise.resolve(ok(wireNamespaces()[2])))
@@ -179,6 +181,13 @@ function scriptedFace(overrides: {
       set,
       unset,
     },
+    authorization: {
+      list: vi.fn(() => Promise.resolve(ok({ flows: overrides.authorizationFlows ?? [] }))),
+      begin: vi.fn(overrides.authorizationBegin ?? (() => Promise.resolve(ok({ status: 'cancelled' as const })))),
+      cancel: vi.fn(() => Promise.resolve(ok({}))),
+      status: vi.fn(() => Promise.resolve(ok({}))),
+      answer: vi.fn(() => Promise.resolve(ok({}))),
+    },
   }
   return { face, update, replace, mutate, set, unset }
 }
@@ -204,6 +213,7 @@ async function mountFace(scripted: ReturnType<typeof scriptedFace>) {
 async function mountSection(overrides: Parameters<typeof scriptedFace>[0] = {}) {
   return mountFace(scriptedFace(overrides))
 }
+type ScriptedOverrides = Parameters<typeof scriptedFace>[0]
 
 /**
  * Mount for a user who cannot reach any provider yet: no credential is stored
@@ -315,6 +325,7 @@ describe('ModelsSection', () => {
       removable: false,
       apiKeyEnv: 'X',
       credential,
+      flow: undefined,
     })
     expect(needsSetup(row(undefined), false)).toBe(true)
     expect(needsSetup(row({ configured: true, writable: true }), false)).toBe(false)
@@ -908,6 +919,24 @@ describe('ModelsSection', () => {
     })
   })
 
+  it('shows the sign-in control on the Add card for an OAuth provider', async () => {
+    // The add card builds its editor directly rather than through the row
+    // renderer, so the joined flow must survive that path too — this is the
+    // regression a dormant OAuth provider (nothing configured yet) exposes.
+    await mountSection({
+      authorizationFlows: [{
+        key: 'llm-pi-ai/anthropic',
+        label: 'Anthropic',
+        methods: [{ id: 'oauth', label: 'Sign in with Anthropic' }],
+        inFlight: false,
+      }],
+    })
+    fireEvent.click(screen.getByText(en.add))
+    const pick = await screen.findByLabelText<HTMLSelectElement>(en.provider)
+    fireEvent.change(pick, { target: { value: 'anthropic' } })
+    expect(await screen.findByRole('button', { name: 'Sign in with Anthropic' })).toBeTruthy()
+  })
+
   it('adds a dormant provider with a derived reference and stores its key', async () => {
     const { mutate, set } = await mountSection()
     fireEvent.click(screen.getByText(en.add))
@@ -929,6 +958,41 @@ describe('ModelsSection', () => {
       expectedRevision: 0,
     })
     await waitFor(() => { expect(set).toHaveBeenCalledWith({ ref: 'ANTHROPIC_API_KEY', value: 'sk-ant' }) })
+  })
+
+  it('offers and completes an OAuth sign-in from the provider card', async () => {
+    let release!: (response: RpcResponse<{ status: 'authorized' | 'cancelled' }>) => void
+    const flows = [{
+      key: 'llm-pi-ai/openai',
+      label: 'openai',
+      methods: [{ id: 'oauth', label: 'Sign in with OpenAI' }],
+      inFlight: false,
+    }]
+    const overrides: ScriptedOverrides = {
+      authorizationFlows: flows,
+      authorizationBegin: () => new Promise<RpcResponse<{ status: 'authorized' | 'cancelled' }>>((resolve) => { release = resolve }),
+    }
+    const mounted = await mountSection(overrides)
+    const { face } = mounted
+    // The join: the row's record address names its claiming flow.
+    expect(mounted.controller.store.getSnapshot().rows.find(row => row.entry.provider === 'openai')?.flow?.key)
+      .toBe('llm-pi-ai/openai')
+
+    // The openai row joins the flow by its record address; opening its
+    // editor shows the interactive control beside the key field.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit openai' }))
+    const signIn = await screen.findByRole('button', { name: 'Sign in with OpenAI' })
+    fireEvent.click(signIn)
+    await waitFor(() => {
+      expect(face.authorization.begin).toHaveBeenCalledWith({ key: 'llm-pi-ai/openai', method: 'oauth' })
+    })
+
+    release(ok({ status: 'authorized' }))
+    await waitFor(() => {
+      // Settlement refreshes the credential hint for the editor's key field.
+      expect(face.credentials.describe).toHaveBeenCalledWith({ refs: ['OPENAI_API_KEY'] })
+    })
+    await waitFor(() => { expect(screen.getByRole('button', { name: 'Sign in with OpenAI' })).toBeTruthy() })
   })
 
   it('keeps pi-ai provider-native authentication when no key is entered', async () => {

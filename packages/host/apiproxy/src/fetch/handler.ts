@@ -63,6 +63,10 @@ import {
 import {
   credentialsDescribeRequestSchema, credentialsSetRequestSchema, credentialsUnsetRequestSchema,
 } from '../api/credentials.schema.ts'
+import {
+  authorizationAnswerRequestSchema, authorizationBeginRequestSchema, authorizationCancelRequestSchema,
+  authorizationListRequestSchema, authorizationStatusRequestSchema,
+} from '../api/authorization.schema.ts'
 import { llmDiscoverModelsRequestSchema, llmModelsRequestSchema, llmProvidersRequestSchema } from '../api/llm.schema.ts'
 import {
   subagentHistoryRequestSchema,
@@ -137,6 +141,11 @@ const UNARY_ROUTES: UnaryRoutes = {
   'credentials.describe': { schema: credentialsDescribeRequestSchema, invoke: (api, r) => api.credentials.describe(r) },
   'credentials.set': { schema: credentialsSetRequestSchema, invoke: (api, r) => api.credentials.set(r) },
   'credentials.unset': { schema: credentialsUnsetRequestSchema, invoke: (api, r) => api.credentials.unset(r) },
+  'authorization.list': { schema: authorizationListRequestSchema, invoke: (api, r) => api.authorization.list(r) },
+  'authorization.begin': { schema: authorizationBeginRequestSchema, invoke: (api, r, signal) => api.authorization.begin(r, signal) },
+  'authorization.cancel': { schema: authorizationCancelRequestSchema, invoke: (api, r) => api.authorization.cancel(r) },
+  'authorization.status': { schema: authorizationStatusRequestSchema, invoke: (api, r) => api.authorization.status(r) },
+  'authorization.answer': { schema: authorizationAnswerRequestSchema, invoke: (api, r) => api.authorization.answer(r) },
   'llm.providers': { schema: llmProvidersRequestSchema, invoke: (api, r) => api.llm.providers(r) },
   'llm.models': { schema: llmModelsRequestSchema, invoke: (api, r) => api.llm.models(r) },
   'llm.discoverModels': { schema: llmDiscoverModelsRequestSchema, invoke: (api, r, signal) => api.llm.discoverModels(r, signal) },

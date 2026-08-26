@@ -34,7 +34,7 @@ export interface ModelsSectionInjected {
     snapshot: ModelsSettingsStore['store']
   }
   /** Wire faces the editor writes through. */
-  api: Pick<IApiClient, 'settings' | 'credentials' | 'llm'>
+  api: Pick<IApiClient, 'settings' | 'credentials' | 'llm' | 'authorization'>
   /** Settings schema and immutable path callbacks. */
   schema: SettingsSchemaOperations
   /** Section copy. */
@@ -65,6 +65,8 @@ interface EditorTarget extends ProviderIdentity {
   credentialRef?: string
   /** The adapter reports this route as one it does not ship (see {@link ProviderEditorProps.declared}). */
   declared?: boolean
+  /** The authorization flow claiming this provider's record, when one does. */
+  flow?: ProviderRow['flow']
 }
 
 /** Values that vary around the shared provider-editor rendering. */
@@ -83,6 +85,7 @@ function renderProviderEditor({ target, ...props }: ProviderEditorRenderProps): 
       displayName={target.displayName}
       settingsPath={target.settingsPath}
       {...target.declared === true ? { declared: true } : {}}
+      {...target.flow === undefined ? {} : { flow: target.flow }}
       {...props}
     />
   )
@@ -155,6 +158,7 @@ function targetOf(row: ProviderRow): EditorTarget {
     // route-level fields only a declared route owns off the card, exactly as
     // it leaves the custom tag off the row.
     ...row.entry.declared === true ? { declared: true } : {},
+    ...row.flow === undefined ? {} : { flow: row.flow },
   }
 }
 
@@ -430,6 +434,7 @@ function Loaded({ injected }: { injected: ModelsSectionFace }): ReactNode {
                 provider={addTarget.provider}
                 displayName={addTarget.displayName}
                 hideTitle
+                {...addTarget.flow === undefined ? {} : { flow: addTarget.flow }}
                 namespace={addNamespace}
                 schema={schema}
                 settingsPath={addTarget.settingsPath}

@@ -61,6 +61,10 @@ A notice is one-way and never carries a secret: a message, optionally the page t
 
 The vocabulary is deliberately smaller than any one provider's: it describes what a surface must render, so a surface that renders one flow renders all of them.
 
+### On the web wire
+
+The apiproxy exposes the seam as five unary methods — `authorization.list/begin/cancel/status/answer` — with no stream frames. `begin` resolves only at settlement and runs without the unary deadline (an OAuth attempt stays open for minutes); progress reaches the browser through a polled `status({key})` carrying the attempt's buffered notices and its at most one pending prompt, and `answer({key, promptRpcId, value})` correlates the reply by that id. Withdrawal keeps one funnel: the settled listener declines any open prompt of the key, so endpoint cancel, caller abort, and flow failure all unwind identically and settle `cancelled`. The web Models page is the first consumer; the decision and its scope cut are recorded in [the authorization-web-wire Agent Note](../../../.agents/notes/implemented/feature/2026-08-26-authorization-web-wire.md).
+
 ## Model Experience
 
 None, as authorization is a configuration-time conversation with a human and no flow, notice, or prompt reaches a model request.

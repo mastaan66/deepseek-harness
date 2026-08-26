@@ -72,6 +72,15 @@ export interface RpcErrorDetailsMap {
   /** A credential write was refused (read-only shadowing layer or storage failure); the message is the seam's own text. */
   'credential-rejected': { ref: string }
   /**
+   * An authorization attempt was refused by the seam: no flow for the key,
+   * unknown method, another attempt already in flight, or the flow resolved
+   * without committing a record. `reason` carries the seam's stable error
+   * code and the message its own text.
+   */
+  'authorization-rejected': { key: string; reason: string }
+  /** An authorization answer named no pending prompt under its id and key. */
+  'authorization-not-pending': { key: string }
+  /**
    * Interrogating a draft provider endpoint did not produce a model listing:
    * no adapter family serves the namespace, the protocol has no listing this
    * build can read, or the endpoint was unreachable, refused the credential,

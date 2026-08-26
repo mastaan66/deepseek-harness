@@ -14,6 +14,7 @@ import type { EventsApi } from './events.ts'
 import type { GoalsApi } from './goals.ts'
 import type { SettingsApi } from './settings.ts'
 import type { CredentialsApi } from './credentials.ts'
+import type { AuthorizationApi } from './authorization.ts'
 import type { LlmApi } from './llm.ts'
 import type { DownloadsApi } from './downloads.ts'
 import type { ClientResponse, RpcReceipt } from './rpc.ts'
@@ -30,6 +31,7 @@ export interface ApiProxy {
   goals: GoalsApi
   settings: SettingsApi
   credentials: CredentialsApi
+  authorization: AuthorizationApi
   llm: LlmApi
   /** Host-only download surfaces (GET, no wire envelope); absent from IApiClient. */
   downloads: DownloadsApi
@@ -60,6 +62,10 @@ export type { EventsApi, MuxFrame, HostFrame, QueuedInboxItem, ToolCallView, Too
 export type { GoalsApi, GoalId, GoalRef } from './goals.ts'
 export type { SettingsApi, SettingsNamespaceView, SettingsPathOpView, SettingsSecretView } from './settings.ts'
 export type { CredentialsApi, CredentialView } from './credentials.ts'
+export type {
+  AuthorizationApi, AuthorizationAttemptView, AuthorizationFlowView, AuthorizationMethodView,
+  AuthorizationNoticeView, AuthorizationPromptOptionView, AuthorizationPromptView,
+} from './authorization.ts'
 export type { ConfigurableProviderView, DiscoveredModelView, LlmApi } from './llm.ts'
 export type { DownloadsApi } from './downloads.ts'
 export type { ApprovalResponsePayload } from './approvals.ts'

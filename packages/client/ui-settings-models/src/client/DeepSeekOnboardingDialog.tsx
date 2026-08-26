@@ -28,7 +28,7 @@ export interface DeepSeekOnboardingInjected {
   /** Shared Models-page join controller. */
   controller: ModelsSettingsStore
   /** Existing wire face reused by the Models credential editor. */
-  api: Pick<IApiClient, 'settings' | 'credentials' | 'llm'>
+  api: Pick<IApiClient, 'settings' | 'credentials' | 'llm' | 'authorization'>
   /** Settings schema and immutable path callbacks. */
   schema: SettingsSchemaOperations
   /** Feature copy. */
