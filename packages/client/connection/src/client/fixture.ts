@@ -3037,6 +3037,21 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         return ok(request, {})
       },
     },
+    authorization: {
+      list: request => ok(request, { flows: [] }),
+      begin: request => err(request, {
+        code: 'authorization-rejected',
+        message: `fixture: no authorization flow is registered for "${request.payload.key}"`,
+        details: { key: request.payload.key, reason: 'NO_FLOW' },
+      }),
+      cancel: request => ok(request, {}),
+      status: request => ok(request, {}),
+      answer: request => err(request, {
+        code: 'authorization-not-pending',
+        message: 'no authorization prompt is waiting under this id',
+        details: { key: request.payload.key },
+      }),
+    },
     llm: {
       providers: request => ok(request, {
         providers: [
@@ -3224,6 +3239,11 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'credentials.describe': return this.api.credentials.describe(request)
       case 'credentials.set': return this.api.credentials.set(request)
       case 'credentials.unset': return this.api.credentials.unset(request)
+      case 'authorization.list': return this.api.authorization.list(request)
+      case 'authorization.begin': return this.api.authorization.begin(request, signal)
+      case 'authorization.cancel': return this.api.authorization.cancel(request)
+      case 'authorization.status': return this.api.authorization.status(request)
+      case 'authorization.answer': return this.api.authorization.answer(request)
       case 'llm.providers': return this.api.llm.providers(request)
       case 'llm.models': return this.api.llm.models(request)
       case 'llm.discoverModels': return this.api.llm.discoverModels(request, signal)

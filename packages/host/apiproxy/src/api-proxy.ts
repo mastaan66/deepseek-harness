@@ -81,7 +81,16 @@ import type {} from '@deepseek-ai/dsh-skill'
 // provider still serves every other domain.
 import { SettingsConflictError, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsDescriptor, SettingsNamespace, SettingsPathOp } from '@deepseek-ai/dsh-settings'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { credentialRef, parseCredentialKey } from '@deepseek-ai/dsh-credentials'
+// The authorization seam: brand guards run at this wire boundary; the service
+// read stays optional (`ctx.get`) like its credentials sibling. The error
+// classes narrow seam refusals and drive the prompt-withdrawal posture at
+// this boundary.
+import { AuthorizationDeclinedError, AuthorizationError } from '@deepseek-ai/dsh-authorization'
+import type {
+  AuthorizationNoticeView, AuthorizationPromptView,
+} from './api/index.ts'
+import type { AuthorizationNotice, AuthorizationPrompt } from '@deepseek-ai/dsh-authorization/types'
 // Value edge: the rename impl narrows the title service's validation failure; the import also resolves `ctx.get('sessionTitle')`.
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import type { CallId } from '@deepseek-ai/dsh-llm/brand'
@@ -352,8 +361,7 @@ function presetFailure(request: RpcRequest<unknown>, error: unknown): RpcRespons
 }
 
 /** Simple async queue: core callbacks push, the AsyncIterable pulls; abort/return cleans up. */
-class FrameQueue<F> {
-  private buffer: F[] = []
+class FrameQueue<F> {  private buffer: F[] = []
   private waiter: (() => void) | undefined
   private done = false
 
@@ -571,6 +579,27 @@ function directoryError(error: unknown): RpcError {
     return { code: error.code, message: error.message, details: { path: error.path } }
   }
   return { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} }
+}
+
+/** Project one seam notice onto its wire view (structurally identical, re-declared for the boundary). */
+function projectNotice(notice: AuthorizationNotice): AuthorizationNoticeView {
+  return {
+    message: notice.message,
+    ...notice.url === undefined ? {} : { url: notice.url },
+    ...notice.code === undefined ? {} : { code: notice.code },
+  }
+}
+
+/** Project one seam prompt onto its wire view, stamped with its answer's correlation id. */
+function projectPrompt(promptRpcId: string, prompt: AuthorizationPrompt): AuthorizationPromptView {
+  const { signal: _withdrawal, ...rest } = prompt
+  if (rest.kind === 'select') return { promptRpcId, kind: 'select', message: rest.message, options: rest.options }
+  return {
+    promptRpcId,
+    kind: rest.kind,
+    message: rest.message,
+    ...rest.placeholder === undefined ? {} : { placeholder: rest.placeholder },
+  }
 }
 
 /** Resolved Agent model and project-directory defaults consumed by the API implementation. */
@@ -1072,6 +1101,53 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   const pendingApprovals = new Map<RpcId, PendingApproval>()
   const muxQueues = new Set<FrameQueue<RpcRequest<MuxFrame>>>()
   const imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
+
+  // --- Authorization attempt state -----------------------------------------
+  // The web face of `ctx.authorization`: one attempt record per key while its
+  // `begin` runs (notices buffer here; the single pending prompt is addressed
+  // by its own rpcId in `pendingAuthPrompts`), both read by the polled
+  // `authorization.status`. Everything is process-local and cleared at
+  // settlement, so there is nothing to replay and no durable surface.
+  interface PendingAuthPrompt {
+    readonly key: string
+    /** Detach the prompt's withdrawal listeners; the answer path calls this. */
+    cleanup(): void
+    resolve(value: string): void
+    reject(error: unknown): void
+  }
+  interface AuthAttemptRecord {
+    readonly method: string
+    readonly notices: AuthorizationNoticeView[]
+    prompt: PendingAuthPrompt | undefined
+    /** The prompt view as `status` projects it, kept beside its pending entry. */
+    promptView: AuthorizationPromptView | undefined
+    /** Withdraws the open prompt as a decline; absent while none is pending. */
+    withdrawPrompt: (() => void) | undefined
+  }
+  const authAttempts = new Map<string, AuthAttemptRecord>()
+  const pendingAuthPrompts = new Map<RpcId, PendingAuthPrompt>()
+  // A settled event retires the open question of its key: endpoint cancel,
+  // service teardown, and flow self-failure all reach the prompt through this
+  // one listener instead of each interaction path growing its own wiring.
+  ctx.on('authorization/settled', (key) => {
+    authAttempts.get(key)?.withdrawPrompt?.()
+  })
+  // Teardown parity with the approval/question registries: a disposed gateway
+  // breaks every waiting prompt (the surface is gone; a decline would read as
+  // the human's answer) and drops the attempt records, while the attempts
+  // themselves settle through the service's own disposal.
+  ctx.effect(() => () => {
+    for (const prompt of [...pendingAuthPrompts.values()]) {
+      prompt.cleanup()
+      prompt.reject(new Error('authorization channel was disposed'))
+    }
+    pendingAuthPrompts.clear()
+    for (const record of authAttempts.values()) {
+      record.prompt = undefined
+      record.promptView = undefined
+      record.withdrawPrompt = undefined
+    }
+  }, 'api-proxy: authorization attempt state teardown')
 
   /** Serialize image admission with model selection for one agent. */
   function serializeImageAdmission<T>(agent: Agent, operation: () => Promise<T>): Promise<T> {
@@ -1864,6 +1940,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   /** Missing-service report shared by the credentials domain. */
   function credentialsAbsent(): RpcError {
     return { code: 'internal', message: 'credentials service is absent: this deployment does not mount a credential provider (e.g. @deepseek-ai/dsh-credentials-local) in its composition', details: {} }
+  }
+
+  /** Missing-service report shared by the authorization domain. */
+  function authorizationAbsent(): RpcError {
+    return { code: 'internal', message: 'authorization service is absent: this deployment does not mount @deepseek-ai/dsh-authorization in its composition', details: {} }
   }
 
   /** Map one redacted settings descriptor to its wire view. */
@@ -3262,6 +3343,133 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
         return ok(request, {})
+      },
+    },
+
+    authorization: {
+      list(request) {
+        const authorization = ctx.get('authorization')
+        if (authorization === undefined) return Promise.resolve(err(request, authorizationAbsent()))
+        return Promise.resolve(ok(request, {
+          flows: authorization.list().map(flow => ({
+            key: flow.key,
+            label: flow.label,
+            methods: flow.methods.map(method => ({ id: method.id, label: method.label })),
+            inFlight: flow.inFlight,
+          })),
+        }))
+      },
+
+      async begin(request, signal) {
+        const authorization = ctx.get('authorization')
+        if (authorization === undefined) return err(request, authorizationAbsent())
+        const { key, method } = request.payload
+        // One attempt record per key for the polled side channel. The method
+        // recorded is the EFFECTIVE one: a request naming none takes the
+        // flow's first, which is what the surface should display as running.
+        const branded = parseCredentialKey(key)
+        const declared = authorization.describe(branded)
+        const record: AuthAttemptRecord = {
+          method: method ?? declared?.methods[0]?.id ?? '',
+          notices: [],
+          prompt: undefined,
+          promptView: undefined,
+          withdrawPrompt: undefined,
+        }
+        authAttempts.set(key, record)
+        try {
+          const outcome = await authorization.begin({
+            key: branded,
+            ...method === undefined ? {} : { method },
+            signal,
+            interaction: {
+              notify: (notice) => { record.notices.push(projectNotice(notice)) },
+              prompt: prompt => new Promise<string>((resolve, reject) => {
+                const promptRpcId = RpcId(randomUUID())
+                const withdraw = (): void => {
+                  if (!pendingAuthPrompts.delete(promptRpcId)) return
+                  record.prompt = undefined
+                  record.promptView = undefined
+                  record.withdrawPrompt = undefined
+                  // A question withdrawn by its surface reads as the human
+                  // declining through it — the seam's own decline class,
+                  // which folds into a `cancelled` settlement rather than a
+                  // failure.
+                  reject(new AuthorizationDeclinedError())
+                }
+                const cleanup = (): void => { signal.removeEventListener('abort', withdraw) }
+                const pending: PendingAuthPrompt = {
+                  key,
+                  cleanup,
+                  resolve: (value) => { cleanup(); resolve(value) },
+                  reject: (error) => { cleanup(); reject(error) },
+                }
+                record.prompt = pending
+                record.promptView = projectPrompt(promptRpcId, prompt)
+                record.withdrawPrompt = withdraw
+                pendingAuthPrompts.set(promptRpcId, pending)
+                // A signal that fired before registration must still unwind
+                // the question; otherwise the flow would await it forever.
+                if (signal.aborted) withdraw()
+                else signal.addEventListener('abort', withdraw, { once: true })
+              }),
+            },
+          })
+          return ok(request, { status: outcome.status })
+        } catch (error: unknown) {
+          if (error instanceof AuthorizationError) {
+            return err(request, {
+              code: 'authorization-rejected',
+              message: error.message,
+              details: { key, reason: error.code },
+            })
+          }
+          throw error
+        } finally {
+          authAttempts.delete(key)
+        }
+      },
+
+      cancel(request) {
+        const authorization = ctx.get('authorization')
+        if (authorization === undefined) return Promise.resolve(err(request, authorizationAbsent()))
+        authorization.cancel(parseCredentialKey(request.payload.key))
+        return Promise.resolve(ok(request, {}))
+      },
+
+      status(request) {
+        const record = authAttempts.get(request.payload.key)
+        if (record === undefined) return Promise.resolve(ok(request, {}))
+        return Promise.resolve(ok(request, {
+          attempt: {
+            method: record.method,
+            notices: [...record.notices],
+            ...record.promptView === undefined ? {} : { prompt: record.promptView },
+          },
+        }))
+      },
+
+      answer(request) {
+        const { key, promptRpcId, value } = request.payload
+        const rpcId = RpcId(promptRpcId)
+        const prompt = pendingAuthPrompts.get(rpcId)
+        if (prompt === undefined || prompt.key !== key) {
+          return Promise.resolve(err(request, {
+            code: 'authorization-not-pending',
+            message: 'no authorization prompt is waiting under this id',
+            details: { key },
+          }))
+        }
+        pendingAuthPrompts.delete(rpcId)
+        prompt.cleanup()
+        const record = authAttempts.get(key)
+        if (record !== undefined && record.prompt === prompt) {
+          record.prompt = undefined
+          record.promptView = undefined
+          record.withdrawPrompt = undefined
+        }
+        prompt.resolve(value)
+        return Promise.resolve(ok(request, {}))
       },
     },
 

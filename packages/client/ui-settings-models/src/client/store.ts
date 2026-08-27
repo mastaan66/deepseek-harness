@@ -7,7 +7,7 @@
  */
 
 import type {
-  ConfigurableProviderView, CredentialView, IApiClient, SettingsNamespaceView,
+  AuthorizationFlowView, ConfigurableProviderView, CredentialView, IApiClient, SettingsNamespaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
@@ -32,6 +32,13 @@ export interface ProviderRow {
   apiKeyEnv: string | undefined
   /** Credential state for {@link apiKeyEnv}, once described. */
   credential: CredentialView | undefined
+  /**
+   * The authorization flow that can sign this provider in, when one claims
+   * its credential record. Keyed as `<settingsNs>/<route>` — the record
+   * address the multi-provider adapter derives — so a provider with an OAuth
+   * or interactive-key login renders a sign-in control beside its key field.
+   */
+  flow: AuthorizationFlowView | undefined
 }
 
 /** Page snapshot. */
@@ -119,7 +126,7 @@ export class ModelsSettingsStore {
    * @param describeFace - the shared mirror's describe face (namespace views and writability).
    */
   constructor(
-    private readonly api: Pick<IApiClient, 'settings' | 'credentials' | 'llm'>,
+    private readonly api: Pick<IApiClient, 'settings' | 'credentials' | 'llm' | 'authorization'>,
     private readonly schema: SettingsSchemaOperations,
     private readonly describeFace: SettingsDescribeFace,
   ) {}
@@ -160,6 +167,17 @@ export class ModelsSettingsStore {
       return
     }
     const namespaces = new Map(views.map(view => [view.ns, view]))
+    // Authorization flows join by record key; an absent or failing face is
+    // fail-soft — rows render without a sign-in control, which is exactly the
+    // pre-seam posture, and never blocks the page.
+    let flows: readonly AuthorizationFlowView[] = []
+    try {
+      const flowsResponse = await this.api.authorization.list({})
+      if (flowsResponse.result.ok) flows = flowsResponse.result.value.flows
+    } catch {
+      // Fail soft, as above: sign-in stays unavailable, the page does not.
+    }
+    const flowsByKey = new Map(flows.map(flow => [flow.key, flow]))
     const rows: ProviderRow[] = providers.map((entry) => {
       const namespace = namespaces.get(entry.settingsNs)
       const configured = namespace !== undefined
@@ -174,6 +192,7 @@ export class ModelsSettingsStore {
         removable,
         apiKeyEnv: apiKeyEnvOf(namespace, entry.settingsPath, this.schema),
         credential: undefined,
+        flow: entry.settingsNs === '' ? undefined : flowsByKey.get(`${entry.settingsNs}/${entry.provider}`),
       }
     })
     const refs = [...new Set(rows.flatMap(row => row.apiKeyEnv === undefined ? [] : [row.apiKeyEnv]))]

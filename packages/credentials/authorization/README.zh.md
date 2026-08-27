@@ -61,6 +61,10 @@ notice 是单向的，且从不携带机密：一条消息，以及可选的"人
 
 这套词汇刻意小于任何单个 provider 的词汇：它描述的是界面必须渲染什么，因此能渲染一个 flow 的界面就能渲染全部 flow。
 
+### Web 线路形态
+
+apiproxy 将本 seam 暴露为五个 unary 方法——`authorization.list/begin/cancel/status/answer`——不引入任何流式帧。`begin` 直到结算才返回，且不适用 unary 截止时间（OAuth 尝试在数分钟内保持打开是正常的）；进度经轮询 `status({key})` 到达浏览器，返回该尝试已缓存的通知与至多一个待答问题，`answer({key, promptRpcId, value})` 以该 id 关联回答。撤销保持单一漏斗：settled 监听器对该 key 下开放的问题发起拒绝，端点取消、调用者中止与流程失败由此同路收卷并结算为 `cancelled`。Web 的模型页是第一个消费方；决策与范围取舍记录在[授权上 Web 线路的 Agent Note](../../../.agents/notes/implemented/feature/2026-08-26-authorization-web-wire.zh.md)。
+
 ## Model Experience
 
 无，因为授权是配置期与人的对话，flow、notice 与 prompt 都不会抵达模型请求。

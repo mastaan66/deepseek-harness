@@ -32,6 +32,13 @@ describe('dsh-base bundle', () => {
     )
     expect(rows.length).toBeGreaterThan(50)
     expect(rows.some(row => row.id === 'agent-loop')).toBe(true)
+    expect(rows.some(row => row.id === 'authorization')).toBe(true)
+    // The authorization service needs the credential store beside it: flows
+    // confirm their commit through ctx.credentials, so a composition that
+    // mounts one without the other can only fail at first use.
+    const rowIds = rows.map(row => row.id)
+    expect(rowIds.indexOf('authorization')).toBeGreaterThan(rowIds.indexOf('credentials'))
+    expect(manifest.dependencies).toHaveProperty('@deepseek-ai/dsh-authorization')
     expect(rows.find(row => row.id === 'session-telemetry-otel')?.config?.['mode']).toEqual({
       __jsExpr: "process.env.DSH_TELEMETRY_MODE || 'DISABLED'",
     })
